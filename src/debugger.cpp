@@ -67,12 +67,14 @@ bool Debugger::start() {
 bool Debugger::run_commands(std::istream& in, bool echo) {
     std::string line;
     while (true) {
-        printf("(minidbg) ");
+        // At a keyboard, show the prompt before waiting. With echo (scripts, piped
+        // input) the prompt and the command are printed together once the line is read.
+        if (!echo) printf("(minidbg) ");
         if (!std::getline(in, line)) {  // end of input (Ctrl-D or end of script)
-            printf("\n");
+            if (!echo) printf("\n");
             return false;
         }
-        if (echo) printf("%s\n", line.c_str());
+        if (echo) printf("(minidbg) %s\n", line.c_str());
         if (execute(line)) return true;
     }
 }
@@ -83,7 +85,7 @@ void Debugger::shutdown() {
 
 bool Debugger::execute(const std::string& line) {
     std::vector<std::string> words = split(line);
-    if (words.empty()) return false;
+    if (words.empty() || words[0][0] == '#') return false;  // blank line or comment
     const std::string& cmd = words[0];
 
     if (cmd == "quit" || cmd == "q") {

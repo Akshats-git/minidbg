@@ -1,0 +1,12 @@
+## minidbg demo 2/2. Run it with:
+##     minidbg -x demo/segfault.cmds ./build/examples/segfault
+## (Lines starting with ## are not shown in the recording.)
+# minidbg demo 2/2: catching a crash
+#
+# 1. Just run it. The debugger stops at the crash instead of losing it
+continue
+# 2. Where did it die? Walk the call stack
+bt
+# 3. Let the signal through: the program dies the normal way
+continue
+quit

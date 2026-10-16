@@ -1,0 +1,25 @@
+## minidbg demo 1/2. Run it with:
+##     minidbg -x demo/factorial.cmds ./build/examples/factorial
+## This file is a template: demo/run_demo.sh fills in the stepi lines and the
+## stack address of n for the machine it runs on. Lines starting with ## are
+## notes for readers of this file and are not shown in the recording.
+# minidbg demo 1/2: breakpoint, registers, stack memory, backtrace
+#
+# 1. Stop at the start of a function, by name
+break factorial
+continue
+# 2. rdi holds the first argument: n = 5. Look at all registers
+regs
+# 3. Change the argument! Pretend main had called factorial(3)
+set rdi 3
+# 4. Single-step through the prologue (note the function+offset)
+@STEPI@
+# 5. n now lives on the stack. Read that stack variable: it holds our 3
+x @N_ADDR@ 1
+# 6. Run to the next recursive call and look at the call stack
+continue
+bt
+# 7. Let the program finish: it prints 6 instead of 120
+delete 1
+continue
+quit

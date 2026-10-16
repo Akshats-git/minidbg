@@ -1,8 +1,6 @@
-<!-- DEMO-START: replaced with the real recording in the demo commit -->
 ![minidbg demo](docs/demo.gif)
 
-**[▶ Watch the demo on asciinema](ASCIINEMA_URL)**
-<!-- DEMO-END -->
+**[▶ Watch the demo on asciinema](https://asciinema.org/a/REPLACE_WITH_YOUR_RECORDING_ID)** (the recording is also in this repo: [docs/demo.cast](docs/demo.cast))
 
 # minidbg
 
@@ -28,6 +26,7 @@ $ ./build/minidbg ./build/examples/factorial
 | Location | every stop prints `rip` and `function+offset` |
 | Backtrace | `bt` walks the frame-pointer chain (also correct at function entry and at `ret`) |
 | Signals | SIGSEGV and friends are reported with the faulting `rip` and function |
+| Scripts | `-x file` runs debugger commands from a file, like `gdb -x`, so sessions are repeatable |
 
 ## Build and run
 
@@ -36,7 +35,7 @@ Requirements: Ubuntu (or WSL2, not WSL1), `g++` with C++17, `cmake`, `make`. Opt
 ```
 cmake -S . -B build
 cmake --build build
-./build/minidbg ./build/examples/factorial
+./build/minidbg [-x script] ./build/examples/factorial
 ```
 
 The example programs are built into `build/examples/` with `-g -O0 -fno-omit-frame-pointer`:
@@ -68,6 +67,8 @@ Inside Docker, `ptrace` needs `--cap-add=SYS_PTRACE` (and a seccomp profile that
 | `help`, `quit` (`q`) | |
 
 Numbers can be decimal or `0x` hex.
+
+**Scripts.** `minidbg -x commands.txt ./prog` runs the commands in the file first (each is echoed after the prompt), then hands over to the keyboard unless the file ends with `quit`. Lines starting with `#` are comments, and are echoed too, so they work as captions.
 
 ## A full session
 
@@ -268,6 +269,25 @@ With `-fno-omit-frame-pointer`, every function begins `push rbp; mov rbp, rsp`, 
 
 One subtlety is handled: a breakpoint on a function name stops on its first instruction, before `push rbp` has run, so `rbp` still belongs to the *caller*. For frame 0 only, `bt` checks whether `rip` is before `push rbp`, between `push rbp` and `mov rbp, rsp`, or at `ret`, and if so takes the return address from the stack pointer instead.
 
+## The demo
+
+The recording at the top is produced by two command files and one driver script, all in [demo/](demo):
+
+| File | Role |
+|---|---|
+| [demo/factorial.cmds](demo/factorial.cmds) | breakpoint on a function, `regs`, `set rdi 3` (changes the program's output from 120 to 6), `stepi`, reading a stack variable with `x`, `bt` |
+| [demo/segfault.cmds](demo/segfault.cmds) | catching a SIGSEGV, `bt` at the crash |
+| [demo/run_demo.sh](demo/run_demo.sh) | plays both with `minidbg -x`, pausing after each line so it is watchable |
+
+Stack addresses differ between machines, so `run_demo.sh` first works out where `n` lives (from the disassembly) and what `rbp` is (a silent trial run) and fills those into the factorial script. Re-record it with:
+
+```
+cmake --build build
+asciinema rec --cols 96 --rows 46 -c demo/run_demo.sh docs/demo.cast
+agg --font-size 16 --last-frame-duration 4 docs/demo.cast docs/demo.gif
+asciinema upload docs/demo.cast        # prints the shareable link
+```
+
 ## Using it with your own compiler's output
 
 Anything that ends up as an x86-64 ELF works. For a compiler that emits NASM:
@@ -316,3 +336,5 @@ For `bt` the generated code has to keep the `rbp` frame chain (`push rbp` / `mov
 | [src/elf.cpp](src/elf.cpp) | ELF64 parser: header, sections, `.symtab`, symbol lookup |
 | [src/registers.cpp](src/registers.cpp) | register names ↔ `user_regs_struct` fields |
 | [src/util.cpp](src/util.cpp) | `split` and `parse_number` |
+| [examples/](examples) | the programs to debug (C and NASM) |
+| [demo/](demo) | the scripted demo (`-x` command files + `run_demo.sh`) |
