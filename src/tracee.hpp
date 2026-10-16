@@ -51,6 +51,10 @@ public:
     bool peek(uint64_t address, uint64_t& value);
     bool poke(uint64_t address, uint64_t value);
 
+    // Where did the kernel load the executable at `exe_path`? Looks it up in
+    // /proc/<pid>/maps. Returns false if the file is not mapped.
+    bool find_load_address(const std::string& exe_path, uint64_t& address);
+
     // Forcibly end the tracee (used when the user quits early).
     void kill_and_reap();
 

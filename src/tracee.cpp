@@ -12,6 +12,7 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 
 bool Tracee::start(const std::string& program, const std::vector<std::string>& args) {
     // execv wants a char* array: program name, then the arguments, then nullptr.
@@ -131,6 +132,29 @@ bool Tracee::poke(uint64_t address, uint64_t value) {
     // pages such as the code segment (it makes a private copy of the page).
     return ptrace(PTRACE_POKEDATA, pid_, reinterpret_cast<void*>(address),
                   reinterpret_cast<void*>(value)) == 0;
+}
+
+bool Tracee::find_load_address(const std::string& exe_path, uint64_t& address) {
+    // /proc/<pid>/maps lists every memory mapping of the process, lowest address
+    // first, one per line:
+    //   555555554000-555555555000 r--p 00000000 08:20 12345   /home/me/prog
+    //   start        -end         perms offset  dev   inode   path
+    // The first line naming our executable is its lowest mapping, i.e. where the
+    // kernel placed the start of the file.
+    char* resolved = realpath(exe_path.c_str(), nullptr);  // maps shows absolute paths
+    if (!resolved) return false;
+    std::string wanted = resolved;
+    free(resolved);
+
+    std::ifstream maps("/proc/" + std::to_string(pid_) + "/maps");
+    std::string line;
+    while (std::getline(maps, line)) {
+        size_t slash = line.find('/');  // the path is the first thing containing a '/'
+        if (slash == std::string::npos || line.substr(slash) != wanted) continue;
+        address = std::stoull(line, nullptr, 16);  // stops parsing at the '-'
+        return true;
+    }
+    return false;
 }
 
 void Tracee::kill_and_reap() {

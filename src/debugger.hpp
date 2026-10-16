@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "elf.hpp"
 #include "tracee.hpp"
 
 // A software breakpoint: the byte at `address` is replaced by 0xCC (int3).
@@ -40,10 +41,14 @@ private:
     void cmd_break(const std::vector<std::string>& words);
     void cmd_delete(const std::vector<std::string>& words);
     void cmd_info(const std::vector<std::string>& words);
+    void cmd_symbols();
     void cmd_continue();
     void cmd_regs();
     void cmd_set(const std::vector<std::string>& words);
     void cmd_help();
+
+    // Turn "main" or "0x555555555149" into a runtime address. Prints why on failure.
+    bool resolve_location(const std::string& text, uint64_t& address);
 
     // Breakpoint bookkeeping. insert writes int3 into the tracee (and remembers the
     // byte it replaced); remove puts the original byte back.
@@ -72,6 +77,11 @@ private:
     std::string program_;
     std::vector<std::string> args_;
     Tracee tracee_;
+    ElfFile elf_;
+
+    // Add this to an address from the ELF file to get the address in the running
+    // process. Zero for normal executables; the load address for PIE ones.
+    uint64_t load_bias_ = 0;
 
     // A signal (e.g. SIGSEGV) that stopped the program and has not been delivered
     // yet. It is passed to the program on the next resume.

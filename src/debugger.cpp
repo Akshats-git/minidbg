@@ -24,9 +24,39 @@ std::string signal_name(int sig) {
 }  // namespace
 
 bool Debugger::start() {
+    // Parse the ELF file first: if it is not a usable executable, don't launch it.
+    try {
+        elf_.load(program_);
+    } catch (const std::exception& error) {
+        fprintf(stderr, "%s: %s\n", program_.c_str(), error.what());
+        return false;
+    }
+
     if (!tracee_.start(program_, args_)) return false;
-    printf("Launched %s (pid %d). Type 'continue' to run it, 'help' for commands.\n",
-           program_.c_str(), tracee_.pid());
+    printf("Launched %s (pid %d).\n", program_.c_str(), tracee_.pid());
+
+    // Where did the kernel put the program? For a PIE executable every address in
+    // the ELF file is an offset from this load address. Other executables are
+    // linked for fixed addresses, so no adjustment is needed.
+    uint64_t mapped_at = 0;
+    if (!tracee_.find_load_address(program_, mapped_at)) {
+        fprintf(stderr, "Could not find %s in /proc/%d/maps.\n", program_.c_str(), tracee_.pid());
+        tracee_.kill_and_reap();
+        return false;
+    }
+    if (elf_.is_pie()) {
+        load_bias_ = mapped_at;
+        printf("Position-independent executable loaded at 0x%lx.\n", load_bias_);
+    } else {
+        printf("Fixed-address executable (not PIE), mapped at 0x%lx.\n", mapped_at);
+    }
+
+    if (elf_.functions().empty()) {
+        printf("No symbol table found (stripped?). Breaking by function name will not work.\n");
+    } else {
+        printf("Read %zu function symbols.\n", elf_.functions().size());
+    }
+    printf("Type 'continue' to run it, 'help' for commands.\n");
     return true;
 }
 
@@ -62,6 +92,8 @@ bool Debugger::execute(const std::string& line) {
         cmd_delete(words);
     } else if (cmd == "info") {
         cmd_info(words);
+    } else if (cmd == "symbols") {
+        cmd_symbols();
     } else if (cmd == "regs") {
         cmd_regs();
     } else if (cmd == "set") {
@@ -77,9 +109,10 @@ bool Debugger::execute(const std::string& line) {
 void Debugger::cmd_help() {
     printf("Commands:\n"
            "  continue (c)   run until the next stop\n"
-           "  break <address>    stop when the program reaches this address\n"
+           "  break <address|function>   stop when the program reaches it\n"
            "  delete <n>     remove breakpoint number n\n"
            "  info breakpoints   list breakpoints\n"
+           "  symbols        list function symbols with their addresses\n"
            "  regs           print all registers\n"
            "  set <reg> <value>  change a register, e.g. set rax 5\n"
            "  help           show this list\n"
@@ -243,14 +276,11 @@ WaitResult Debugger::step_instruction() {
 void Debugger::cmd_break(const std::vector<std::string>& words) {
     if (!require_process()) return;
     if (words.size() != 2) {
-        printf("usage: break <address>\n");
+        printf("usage: break <address|function>\n");
         return;
     }
     uint64_t address;
-    if (!parse_number(words[1], address)) {
-        printf("'%s' is not an address.\n", words[1].c_str());
-        return;
-    }
+    if (!resolve_location(words[1], address)) return;
     if (Breakpoint* existing = find_breakpoint_at(address)) {
         printf("Breakpoint %d is already at 0x%lx.\n", existing->id, address);
         return;
@@ -263,6 +293,24 @@ void Debugger::cmd_break(const std::vector<std::string>& words) {
     next_breakpoint_id_++;
     breakpoints_.push_back(bp);
     printf("Breakpoint %d at 0x%lx\n", bp.id, address);
+}
+
+bool Debugger::resolve_location(const std::string& text, uint64_t& address) {
+    if (parse_number(text, address)) return true;  // a plain runtime address
+    const Symbol* sym = elf_.find_by_name(text);
+    if (!sym) {
+        printf("No function named '%s' (see 'symbols').\n", text.c_str());
+        return false;
+    }
+    address = load_bias_ + sym->address;  // file address -> running-process address
+    return true;
+}
+
+void Debugger::cmd_symbols() {
+    printf("%-18s  %-6s  %s\n", "Address", "Size", "Name");
+    for (const Symbol& sym : elf_.functions()) {
+        printf("0x%016lx  %-6lu  %s\n", load_bias_ + sym.address, sym.size, sym.name.c_str());
+    }
 }
 
 void Debugger::cmd_delete(const std::vector<std::string>& words) {
