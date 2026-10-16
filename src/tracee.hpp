@@ -8,6 +8,7 @@
 #include <sys/types.h>
 #include <sys/user.h>
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -35,12 +36,20 @@ public:
     // Let the tracee run until the next stop. `signal` is delivered to it (0 = none).
     void cont(int signal);
 
+    // Execute exactly one instruction, then stop again. `signal` as for cont().
+    void single_step(int signal);
+
     // Block until the tracee stops, exits or is killed.
     WaitResult wait();
 
     // Read / write all general-purpose registers. False if the tracee is not stopped.
     bool get_regs(user_regs_struct& regs);
     bool set_regs(const user_regs_struct& regs);
+
+    // Read / write one 8-byte word of the tracee's memory. False if the address
+    // is not mapped. Works on read-only memory too, which is how we patch code.
+    bool peek(uint64_t address, uint64_t& value);
+    bool poke(uint64_t address, uint64_t value);
 
     // Forcibly end the tracee (used when the user quits early).
     void kill_and_reap();

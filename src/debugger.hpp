@@ -10,6 +10,13 @@
 
 #include "tracee.hpp"
 
+// A software breakpoint: the byte at `address` is replaced by 0xCC (int3).
+struct Breakpoint {
+    int id;
+    uint64_t address;
+    uint8_t original_byte;  // the byte that int3 replaced
+};
+
 class Debugger {
 public:
     Debugger(std::string program, std::vector<std::string> args)
@@ -30,13 +37,34 @@ private:
     // Run one command line. Returns true for quit.
     bool execute(const std::string& line);
 
+    void cmd_break(const std::vector<std::string>& words);
+    void cmd_delete(const std::vector<std::string>& words);
+    void cmd_info(const std::vector<std::string>& words);
     void cmd_continue();
     void cmd_regs();
     void cmd_set(const std::vector<std::string>& words);
     void cmd_help();
 
-    // Print what happened after the tracee stopped, exited or was killed.
-    void report(const WaitResult& result);
+    // Breakpoint bookkeeping. insert writes int3 into the tracee (and remembers the
+    // byte it replaced); remove puts the original byte back.
+    bool insert_breakpoint(Breakpoint& bp);
+    void remove_breakpoint(const Breakpoint& bp);
+    Breakpoint* find_breakpoint_at(uint64_t address);
+
+    // Execute one instruction. If a breakpoint sits at the current rip, step over it
+    // correctly (remove int3, step, put int3 back).
+    WaitResult step_instruction();
+
+    uint64_t current_pc();
+
+    // Report exit / kill / any signal other than SIGTRAP. Returns true if it did,
+    // false if the stop was a SIGTRAP the caller must interpret.
+    bool report_unusual_stop(const WaitResult& result);
+
+    // After PTRACE_CONT stopped with SIGTRAP: was it one of our breakpoints?
+    void report_trap_after_continue();
+
+    void print_stop_location();
 
     // False (with a message) if the program is not running any more.
     bool require_process();
@@ -48,4 +76,7 @@ private:
     // A signal (e.g. SIGSEGV) that stopped the program and has not been delivered
     // yet. It is passed to the program on the next resume.
     int pending_signal_ = 0;
+
+    std::vector<Breakpoint> breakpoints_;
+    int next_breakpoint_id_ = 1;
 };

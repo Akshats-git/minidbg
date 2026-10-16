@@ -76,6 +76,12 @@ void Tracee::cont(int signal) {
     ptrace(PTRACE_CONT, pid_, nullptr, reinterpret_cast<void*>(static_cast<long>(signal)));
 }
 
+void Tracee::single_step(int signal) {
+    // PTRACE_SINGLESTEP: like PTRACE_CONT, but the CPU's trap flag is set so it
+    // stops again right after executing ONE instruction (we get a SIGTRAP).
+    ptrace(PTRACE_SINGLESTEP, pid_, nullptr, reinterpret_cast<void*>(static_cast<long>(signal)));
+}
+
 WaitResult Tracee::wait() {
     int status = 0;
     // waitpid blocks until the tracee changes state. With ptrace, "changes state"
@@ -106,6 +112,25 @@ bool Tracee::set_regs(const user_regs_struct& regs) {
     // PTRACE_SETREGS: the opposite. The kernel loads these values into the
     // tracee's registers, so they take effect when it next runs.
     return ptrace(PTRACE_SETREGS, pid_, nullptr, &regs) == 0;
+}
+
+bool Tracee::peek(uint64_t address, uint64_t& value) {
+    // PTRACE_PEEKDATA: read one word (8 bytes) at `address` in the tracee.
+    // The word is the return value, so -1 is ambiguous (it could be real data);
+    // we clear errno first and check it afterwards to tell an error from data.
+    errno = 0;
+    long word = ptrace(PTRACE_PEEKDATA, pid_, reinterpret_cast<void*>(address), nullptr);
+    if (word == -1 && errno != 0) return false;
+    value = static_cast<uint64_t>(word);
+    return true;
+}
+
+bool Tracee::poke(uint64_t address, uint64_t value) {
+    // PTRACE_POKEDATA: write one word (8 bytes) at `address` in the tracee.
+    // Unlike a normal store, the kernel lets the tracer write even to read-only
+    // pages such as the code segment (it makes a private copy of the page).
+    return ptrace(PTRACE_POKEDATA, pid_, reinterpret_cast<void*>(address),
+                  reinterpret_cast<void*>(value)) == 0;
 }
 
 void Tracee::kill_and_reap() {
