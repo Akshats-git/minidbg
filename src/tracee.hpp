@@ -6,6 +6,7 @@
 #pragma once
 
 #include <sys/types.h>
+#include <sys/user.h>
 
 #include <string>
 #include <vector>
@@ -36,6 +37,10 @@ public:
 
     // Block until the tracee stops, exits or is killed.
     WaitResult wait();
+
+    // Read / write all general-purpose registers. False if the tracee is not stopped.
+    bool get_regs(user_regs_struct& regs);
+    bool set_regs(const user_regs_struct& regs);
 
     // Forcibly end the tracee (used when the user quits early).
     void kill_and_reap();

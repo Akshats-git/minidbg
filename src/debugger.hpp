@@ -31,6 +31,8 @@ private:
     bool execute(const std::string& line);
 
     void cmd_continue();
+    void cmd_regs();
+    void cmd_set(const std::vector<std::string>& words);
     void cmd_help();
 
     // Print what happened after the tracee stopped, exited or was killed.

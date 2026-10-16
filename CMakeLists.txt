@@ -12,6 +12,7 @@ endif()
 add_executable(minidbg
   src/main.cpp
   src/debugger.cpp
+  src/registers.cpp
   src/tracee.cpp
   src/util.cpp
 )

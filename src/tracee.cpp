@@ -96,6 +96,18 @@ WaitResult Tracee::wait() {
     return {StopKind::Stopped, WSTOPSIG(status)};
 }
 
+bool Tracee::get_regs(user_regs_struct& regs) {
+    // PTRACE_GETREGS: the kernel copies the stopped tracee's registers into the
+    // user_regs_struct we pass in (rax, rbx, ..., rip, rsp, eflags, ...).
+    return ptrace(PTRACE_GETREGS, pid_, nullptr, &regs) == 0;
+}
+
+bool Tracee::set_regs(const user_regs_struct& regs) {
+    // PTRACE_SETREGS: the opposite. The kernel loads these values into the
+    // tracee's registers, so they take effect when it next runs.
+    return ptrace(PTRACE_SETREGS, pid_, nullptr, &regs) == 0;
+}
+
 void Tracee::kill_and_reap() {
     if (!alive_) return;
     // SIGKILL cannot be caught or blocked, so this always ends the tracee.
