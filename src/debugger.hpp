@@ -43,6 +43,9 @@ private:
     void cmd_info(const std::vector<std::string>& words);
     void cmd_symbols();
     void cmd_continue();
+    void cmd_stepi();
+    void cmd_x(const std::vector<std::string>& words);
+    void cmd_write(const std::vector<std::string>& words);
     void cmd_regs();
     void cmd_set(const std::vector<std::string>& words);
     void cmd_help();
@@ -61,6 +64,9 @@ private:
     WaitResult step_instruction();
 
     uint64_t current_pc();
+
+    // "bump+4" for an address inside a known function, "" if we don't know it.
+    std::string describe_address(uint64_t address);
 
     // Report exit / kill / any signal other than SIGTRAP. Returns true if it did,
     // false if the stop was a SIGTRAP the caller must interpret.

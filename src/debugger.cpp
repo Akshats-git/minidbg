@@ -56,6 +56,8 @@ bool Debugger::start() {
     } else {
         printf("Read %zu function symbols.\n", elf_.functions().size());
     }
+    printf("Stopped before the program's first instruction:\n");
+    print_stop_location();
     printf("Type 'continue' to run it, 'help' for commands.\n");
     return true;
 }
@@ -92,6 +94,12 @@ bool Debugger::execute(const std::string& line) {
         cmd_delete(words);
     } else if (cmd == "info") {
         cmd_info(words);
+    } else if (cmd == "stepi" || cmd == "si") {
+        cmd_stepi();
+    } else if (cmd == "x") {
+        cmd_x(words);
+    } else if (cmd == "write") {
+        cmd_write(words);
     } else if (cmd == "symbols") {
         cmd_symbols();
     } else if (cmd == "regs") {
@@ -112,6 +120,9 @@ void Debugger::cmd_help() {
            "  break <address|function>   stop when the program reaches it\n"
            "  delete <n>     remove breakpoint number n\n"
            "  info breakpoints   list breakpoints\n"
+           "  stepi (si)     execute one instruction\n"
+           "  x <address> <count>    dump memory as hex 8-byte words\n"
+           "  write <address> <value>    write an 8-byte value to memory\n"
            "  symbols        list function symbols with their addresses\n"
            "  regs           print all registers\n"
            "  set <reg> <value>  change a register, e.g. set rax 5\n"
@@ -230,7 +241,64 @@ void Debugger::report_trap_after_continue() {
 }
 
 void Debugger::print_stop_location() {
-    printf("  rip = 0x%lx\n", current_pc());
+    uint64_t rip = current_pc();
+    std::string where = describe_address(rip);
+    printf("  rip = 0x%lx <%s>\n", rip, where.empty() ? "unknown" : where.c_str());
+}
+
+std::string Debugger::describe_address(uint64_t address) {
+    if (address < load_bias_) return "";  // below the program: avoid wrapping around
+    const Symbol* sym = elf_.find_containing(address - load_bias_);
+    if (!sym) return "";
+    return sym->name + "+" + std::to_string(address - load_bias_ - sym->address);
+}
+
+void Debugger::cmd_stepi() {
+    if (!require_process()) return;
+    WaitResult result = step_instruction();
+    if (report_unusual_stop(result)) return;
+    print_stop_location();  // a SIGTRAP here is just the single-step finishing
+}
+
+void Debugger::cmd_x(const std::vector<std::string>& words) {
+    if (!require_process()) return;
+    uint64_t address, count = 1;
+    if (words.size() < 2 || words.size() > 3 || !parse_number(words[1], address) ||
+        (words.size() == 3 && !parse_number(words[2], count))) {
+        printf("usage: x <address> [count]\n");
+        return;
+    }
+    if (count > 1024) {
+        printf("count is too large (maximum 1024).\n");
+        return;
+    }
+    // Print two 8-byte words per line, each line starting with its address.
+    for (uint64_t i = 0; i < count; i++) {
+        uint64_t word_address = address + 8 * i;
+        uint64_t word;
+        if (!tracee_.peek(word_address, word)) {
+            if (i > 0) printf("\n");  // finish the line we were in the middle of
+            printf("Cannot access memory at 0x%lx.\n", word_address);
+            return;
+        }
+        if (i % 2 == 0) printf("%s0x%lx:", i == 0 ? "" : "\n", word_address);
+        printf("  0x%016lx", word);
+    }
+    printf("\n");
+}
+
+void Debugger::cmd_write(const std::vector<std::string>& words) {
+    if (!require_process()) return;
+    uint64_t address, value;
+    if (words.size() != 3 || !parse_number(words[1], address) || !parse_number(words[2], value)) {
+        printf("usage: write <address> <value>\n");
+        return;
+    }
+    if (!tracee_.poke(address, value)) {
+        printf("Cannot access memory at 0x%lx.\n", address);
+        return;
+    }
+    printf("Wrote 0x%lx to 0x%lx.\n", value, address);
 }
 
 uint64_t Debugger::current_pc() {
@@ -292,7 +360,7 @@ void Debugger::cmd_break(const std::vector<std::string>& words) {
     }
     next_breakpoint_id_++;
     breakpoints_.push_back(bp);
-    printf("Breakpoint %d at 0x%lx\n", bp.id, address);
+    printf("Breakpoint %d at 0x%lx <%s>\n", bp.id, address, describe_address(address).c_str());
 }
 
 bool Debugger::resolve_location(const std::string& text, uint64_t& address) {
@@ -339,8 +407,8 @@ void Debugger::cmd_info(const std::vector<std::string>& words) {
         printf("No breakpoints.\n");
         return;
     }
-    printf("Num  Address\n");
+    printf("Num  Address             What\n");
     for (const Breakpoint& bp : breakpoints_) {
-        printf("%-4d 0x%016lx\n", bp.id, bp.address);
+        printf("%-4d 0x%016lx  %s\n", bp.id, bp.address, describe_address(bp.address).c_str());
     }
 }
