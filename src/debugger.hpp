@@ -44,6 +44,7 @@ private:
     void cmd_symbols();
     void cmd_continue();
     void cmd_stepi();
+    void cmd_bt();
     void cmd_x(const std::vector<std::string>& words);
     void cmd_write(const std::vector<std::string>& words);
     void cmd_regs();
@@ -64,6 +65,15 @@ private:
     WaitResult step_instruction();
 
     uint64_t current_pc();
+
+    // Like Tracee::peek, but shows the original bytes where we have patched in an
+    // int3, so the user (and bt) never see our own 0xCC bytes.
+    bool read_word(uint64_t address, uint64_t& word);
+
+    // For bt: if rbp does not describe the current function's frame (we are before
+    // its "push rbp; mov rbp, rsp" or at its "ret"), return the stack address that
+    // holds its return address. Returns 0 when rbp is fine to use.
+    uint64_t return_address_slot_without_frame(const user_regs_struct& regs);
 
     // "bump+4" for an address inside a known function, "" if we don't know it.
     std::string describe_address(uint64_t address);

@@ -14,6 +14,8 @@
 
 namespace {
 
+const size_t kMaxFrames = 64;  // bt gives up after this many frames
+
 // "SIGSEGV (Segmentation fault)" for a signal number.
 std::string signal_name(int sig) {
     const char* abbrev = sigabbrev_np(sig);  // "SEGV"
@@ -96,6 +98,8 @@ bool Debugger::execute(const std::string& line) {
         cmd_info(words);
     } else if (cmd == "stepi" || cmd == "si") {
         cmd_stepi();
+    } else if (cmd == "bt") {
+        cmd_bt();
     } else if (cmd == "x") {
         cmd_x(words);
     } else if (cmd == "write") {
@@ -121,6 +125,7 @@ void Debugger::cmd_help() {
            "  delete <n>     remove breakpoint number n\n"
            "  info breakpoints   list breakpoints\n"
            "  stepi (si)     execute one instruction\n"
+           "  bt             show the call stack (needs -fno-omit-frame-pointer)\n"
            "  x <address> <count>    dump memory as hex 8-byte words\n"
            "  write <address> <value>    write an 8-byte value to memory\n"
            "  symbols        list function symbols with their addresses\n"
@@ -211,7 +216,7 @@ bool Debugger::report_unusual_stop(const WaitResult& result) {
     case StopKind::Stopped:
         if (result.value == SIGTRAP) return false;
         // Some other signal. Remember it so the next resume passes it to the program.
-        printf("Program received %s.\n", signal_name(result.value).c_str());
+        printf("Program received signal %s.\n", signal_name(result.value).c_str());
         print_stop_location();
         pending_signal_ = result.value;
         return true;
@@ -276,7 +281,7 @@ void Debugger::cmd_x(const std::vector<std::string>& words) {
     for (uint64_t i = 0; i < count; i++) {
         uint64_t word_address = address + 8 * i;
         uint64_t word;
-        if (!tracee_.peek(word_address, word)) {
+        if (!read_word(word_address, word)) {
             if (i > 0) printf("\n");  // finish the line we were in the middle of
             printf("Cannot access memory at 0x%lx.\n", word_address);
             return;
@@ -285,6 +290,82 @@ void Debugger::cmd_x(const std::vector<std::string>& words) {
         printf("  0x%016lx", word);
     }
     printf("\n");
+}
+
+bool Debugger::read_word(uint64_t address, uint64_t& word) {
+    if (!tracee_.peek(address, word)) return false;
+    for (const Breakpoint& bp : breakpoints_) {
+        if (bp.address >= address && bp.address < address + 8) {
+            int shift = 8 * (bp.address - address);  // little-endian: byte k sits at bits 8k..8k+7
+            word = (word & ~(0xffULL << shift)) | (static_cast<uint64_t>(bp.original_byte) << shift);
+        }
+    }
+    return true;
+}
+
+uint64_t Debugger::return_address_slot_without_frame(const user_regs_struct& regs) {
+    const Symbol* func = elf_.find_containing(regs.rip - load_bias_);
+    if (!func) return 0;
+    uint64_t start = load_bias_ + func->address;
+
+    // A gcc/NASM function normally begins:  [endbr64]  push rbp  mov rbp, rsp
+    //                                        f3 0f 1e fa   55      48 89 e5
+    uint64_t word;
+    if (!read_word(start, word)) return 0;
+    uint8_t first[8];
+    for (int i = 0; i < 8; i++) first[i] = (word >> (8 * i)) & 0xff;
+    size_t push_at = (first[0] == 0xf3 && first[1] == 0x0f && first[2] == 0x1e && first[3] == 0xfa) ? 4 : 0;
+    if (first[push_at] != 0x55) return 0;  // no "push rbp": nothing special we can say
+
+    uint64_t offset = regs.rip - start;
+    if (offset <= push_at) return regs.rsp;       // push rbp has not run: return address is on top of the stack
+    if (offset == push_at + 1) return regs.rsp + 8;  // push ran, mov did not: saved rbp is on top, return address above it
+
+    uint64_t at_rip;
+    if (read_word(regs.rip, at_rip) && (at_rip & 0xff) == 0xc3) return regs.rsp;  // at "ret": frame already torn down
+    return 0;
+}
+
+void Debugger::cmd_bt() {
+    if (!require_process()) return;
+    user_regs_struct regs;
+    if (!tracee_.get_regs(regs)) {
+        printf("Could not read registers.\n");
+        return;
+    }
+
+    // Collect the return addresses ("pc" of each frame), innermost first.
+    std::vector<uint64_t> pcs = {regs.rip};
+    uint64_t word;
+
+    // Frame 0 may be in its prologue or epilogue, where rbp still/already belongs to
+    // the caller. Then the caller's pc comes from the stack, and rbp is already the
+    // right starting point for the walk below.
+    uint64_t slot = return_address_slot_without_frame(regs);
+    if (slot != 0 && read_word(slot, word)) pcs.push_back(word);
+
+    // The frame-pointer chain. With "push rbp; mov rbp, rsp" at every function entry:
+    //     [rbp]     = the caller's saved rbp   (the next link in the chain)
+    //     [rbp + 8] = the return address into the caller
+    // so each step up the stack gives us one more caller.
+    uint64_t rbp = regs.rbp;
+    while (pcs.size() < kMaxFrames && describe_address(pcs.back()) != "" && rbp != 0) {
+        uint64_t saved_rbp, return_address;
+        if (!read_word(rbp, saved_rbp) || !read_word(rbp + 8, return_address)) break;
+        pcs.push_back(return_address);
+        if (saved_rbp <= rbp) break;  // the stack grows down, so callers' frames are higher; else corrupt
+        rbp = saved_rbp;
+    }
+
+    for (size_t i = 0; i < pcs.size(); i++) {
+        std::string where = describe_address(pcs[i]);
+        printf("#%-2zu 0x%016lx <%s>\n", i, pcs[i], where.empty() ? "unknown" : where.c_str());
+    }
+    // We stop at the first address outside the program (normally libc's startup code,
+    // which has no frame pointers). If frame 0 itself is outside, callers can be missing.
+    if (describe_address(pcs[0]).empty()) {
+        printf("Note: stopped outside the program; frames below may be incomplete.\n");
+    }
 }
 
 void Debugger::cmd_write(const std::vector<std::string>& words) {
